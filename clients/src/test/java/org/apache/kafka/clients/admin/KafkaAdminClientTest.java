@@ -280,7 +280,7 @@ public class KafkaAdminClientTest {
                     new AclFilterResponse(new ApiError(Errors.SECURITY_DISABLED, "No security"),
                             Collections.<AclDeletionResult>emptySet()))));
             DeleteAclsResult results = env.adminClient().deleteAcls(asList(FILTER1, FILTER2));
-            Map<AclBindingFilter, KafkaFuture<FilterResults>> filterResults = results.values();
+            Map<AclBindingFilter, ? extends KafkaFuture<FilterResults>> filterResults = results.values();
             FilterResults filter1Results = filterResults.get(FILTER1).get();
             assertEquals(null, filter1Results.values().get(0).exception());
             assertEquals(ACL1, filter1Results.values().get(0).binding());

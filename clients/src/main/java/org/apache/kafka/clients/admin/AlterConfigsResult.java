@@ -31,16 +31,16 @@ import java.util.Map;
 @InterfaceStability.Evolving
 public class AlterConfigsResult {
 
-    private final Map<ConfigResource, KafkaFuture<Void>> futures;
+    private final Map<ConfigResource, ? extends KafkaFuture<Void>> futures;
 
-    AlterConfigsResult(Map<ConfigResource, KafkaFuture<Void>> futures) {
+    AlterConfigsResult(Map<ConfigResource, ? extends KafkaFuture<Void>> futures) {
         this.futures = futures;
     }
 
     /**
      * Return a map from resources to futures which can be used to check the status of the operation on each resource.
      */
-    public Map<ConfigResource, KafkaFuture<Void>> values() {
+    public Map<ConfigResource, ? extends KafkaFuture<Void>> values() {
         return futures;
     }
 

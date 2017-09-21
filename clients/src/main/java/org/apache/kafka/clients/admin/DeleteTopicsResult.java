@@ -30,9 +30,9 @@ import java.util.Map;
  */
 @InterfaceStability.Evolving
 public class DeleteTopicsResult {
-    final Map<String, KafkaFuture<Void>> futures;
+    final Map<String, ? extends KafkaFuture<Void>> futures;
 
-    DeleteTopicsResult(Map<String, KafkaFuture<Void>> futures) {
+    DeleteTopicsResult(Map<String, ? extends KafkaFuture<Void>> futures) {
         this.futures = futures;
     }
 
@@ -40,7 +40,7 @@ public class DeleteTopicsResult {
      * Return a map from topic names to futures which can be used to check the status of
      * individual deletions.
      */
-    public Map<String, KafkaFuture<Void>> values() {
+    public Map<String, ? extends KafkaFuture<Void>> values() {
         return futures;
     }
 

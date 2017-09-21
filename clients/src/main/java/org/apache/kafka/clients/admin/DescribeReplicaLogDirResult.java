@@ -34,16 +34,16 @@ import java.util.concurrent.ExecutionException;
  */
 @InterfaceStability.Evolving
 public class DescribeReplicaLogDirResult {
-    private final Map<TopicPartitionReplica, KafkaFuture<ReplicaLogDirInfo>> futures;
+    private final Map<TopicPartitionReplica, ? extends KafkaFuture<ReplicaLogDirInfo>> futures;
 
-    DescribeReplicaLogDirResult(Map<TopicPartitionReplica, KafkaFuture<ReplicaLogDirInfo>> futures) {
+    DescribeReplicaLogDirResult(Map<TopicPartitionReplica, ? extends KafkaFuture<ReplicaLogDirInfo>> futures) {
         this.futures = futures;
     }
 
     /**
      * Return a map from replica to future which can be used to check the log directory information of individual replicas
      */
-    public Map<TopicPartitionReplica, KafkaFuture<ReplicaLogDirInfo>> values() {
+    public Map<TopicPartitionReplica, ? extends KafkaFuture<ReplicaLogDirInfo>> values() {
         return futures;
     }
 
@@ -56,7 +56,7 @@ public class DescribeReplicaLogDirResult {
                 @Override
                 public Map<TopicPartitionReplica, ReplicaLogDirInfo> apply(Void v) {
                     Map<TopicPartitionReplica, ReplicaLogDirInfo> replicaLogDirInfos = new HashMap<>();
-                    for (Map.Entry<TopicPartitionReplica, KafkaFuture<ReplicaLogDirInfo>> entry : futures.entrySet()) {
+                    for (Map.Entry<TopicPartitionReplica, ? extends KafkaFuture<ReplicaLogDirInfo>> entry : futures.entrySet()) {
                         try {
                             replicaLogDirInfos.put(entry.getKey(), entry.getValue().get());
                         } catch (InterruptedException | ExecutionException e) {

@@ -82,9 +82,9 @@ public class DeleteAclsResult {
         }
     }
 
-    private final Map<AclBindingFilter, KafkaFuture<FilterResults>> futures;
+    private final Map<AclBindingFilter, ? extends KafkaFuture<FilterResults>> futures;
 
-    DeleteAclsResult(Map<AclBindingFilter, KafkaFuture<FilterResults>> futures) {
+    DeleteAclsResult(Map<AclBindingFilter, ? extends KafkaFuture<FilterResults>> futures) {
         this.futures = futures;
     }
 
@@ -92,7 +92,7 @@ public class DeleteAclsResult {
      * Return a map from acl filters to futures which can be used to check the status of the deletions by each
      * filter.
      */
-    public Map<AclBindingFilter, KafkaFuture<FilterResults>> values() {
+    public Map<AclBindingFilter, ? extends KafkaFuture<FilterResults>> values() {
         return futures;
     }
 
@@ -106,7 +106,7 @@ public class DeleteAclsResult {
                 @Override
                 public Collection<AclBinding> apply(Void v) {
                     List<AclBinding> acls = new ArrayList<>();
-                    for (Map.Entry<AclBindingFilter, KafkaFuture<FilterResults>> entry : futures.entrySet()) {
+                    for (Map.Entry<AclBindingFilter, ? extends KafkaFuture<FilterResults>> entry : futures.entrySet()) {
                         FilterResults results;
                         try {
                             results = entry.getValue().get();

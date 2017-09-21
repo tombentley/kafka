@@ -29,9 +29,9 @@ import java.util.Map;
  */
 @InterfaceStability.Evolving
 public class CreateTopicsResult {
-    private final Map<String, KafkaFuture<Void>> futures;
+    private final Map<String, ? extends KafkaFuture<Void>> futures;
 
-    CreateTopicsResult(Map<String, KafkaFuture<Void>> futures) {
+    CreateTopicsResult(Map<String, ? extends KafkaFuture<Void>> futures) {
         this.futures = futures;
     }
 
@@ -39,7 +39,7 @@ public class CreateTopicsResult {
      * Return a map from topic names to futures, which can be used to check the status of individual
      * topic creations.
      */
-    public Map<String, KafkaFuture<Void>> values() {
+    public Map<String, ? extends KafkaFuture<Void>> values() {
         return futures;
     }
 

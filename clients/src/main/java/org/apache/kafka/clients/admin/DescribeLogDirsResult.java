@@ -33,16 +33,16 @@ import org.apache.kafka.common.requests.DescribeLogDirsResponse.LogDirInfo;
  */
 @InterfaceStability.Evolving
 public class DescribeLogDirsResult {
-    private final Map<Integer, KafkaFuture<Map<String, LogDirInfo>>> futures;
+    private final Map<Integer, ? extends KafkaFuture<Map<String, LogDirInfo>>> futures;
 
-    DescribeLogDirsResult(Map<Integer, KafkaFuture<Map<String, LogDirInfo>>> futures) {
+    DescribeLogDirsResult(Map<Integer, ? extends KafkaFuture<Map<String, LogDirInfo>>> futures) {
         this.futures = futures;
     }
 
     /**
      * Return a map from brokerId to future which can be used to check the information of partitions on each individual broker
      */
-    public Map<Integer, KafkaFuture<Map<String, LogDirInfo>>> values() {
+    public Map<Integer, ? extends KafkaFuture<Map<String, LogDirInfo>>> values() {
         return futures;
     }
 
@@ -55,7 +55,7 @@ public class DescribeLogDirsResult {
                 @Override
                 public Map<Integer, Map<String, LogDirInfo>> apply(Void v) {
                     Map<Integer, Map<String, LogDirInfo>> descriptions = new HashMap<>(futures.size());
-                    for (Map.Entry<Integer, KafkaFuture<Map<String, LogDirInfo>>> entry : futures.entrySet()) {
+                    for (Map.Entry<Integer, ? extends KafkaFuture<Map<String, LogDirInfo>>> entry : futures.entrySet()) {
                         try {
                             descriptions.put(entry.getKey(), entry.getValue().get());
                         } catch (InterruptedException | ExecutionException e) {

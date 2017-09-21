@@ -1092,7 +1092,7 @@ public class KafkaAdminClient extends AdminClient {
                 completeAllExceptionally(topicFutures.values(), throwable);
             }
         }, now);
-        return new CreateTopicsResult(new HashMap<String, KafkaFuture<Void>>(topicFutures));
+        return new CreateTopicsResult(topicFutures);
     }
 
     @Override
@@ -1145,7 +1145,7 @@ public class KafkaAdminClient extends AdminClient {
                 completeAllExceptionally(topicFutures.values(), throwable);
             }
         }, now);
-        return new DeleteTopicsResult(new HashMap<String, KafkaFuture<Void>>(topicFutures));
+        return new DeleteTopicsResult(topicFutures);
     }
 
     @Override
@@ -1262,7 +1262,7 @@ public class KafkaAdminClient extends AdminClient {
                 completeAllExceptionally(topicFutures.values(), throwable);
             }
         }, now);
-        return new DescribeTopicsResult(new HashMap<String, KafkaFuture<TopicDescription>>(topicFutures));
+        return new DescribeTopicsResult(topicFutures);
     }
 
     @Override
@@ -1388,7 +1388,7 @@ public class KafkaAdminClient extends AdminClient {
                 completeAllExceptionally(futures.values(), throwable);
             }
         }, now);
-        return new CreateAclsResult(new HashMap<AclBinding, KafkaFuture<Void>>(futures));
+        return new CreateAclsResult(futures);
     }
 
     @Override
@@ -1440,7 +1440,7 @@ public class KafkaAdminClient extends AdminClient {
                 completeAllExceptionally(futures.values(), throwable);
             }
         }, now);
-        return new DeleteAclsResult(new HashMap<AclBindingFilter, KafkaFuture<FilterResults>>(futures));
+        return new DeleteAclsResult(futures);
     }
 
     @Override
@@ -1612,7 +1612,7 @@ public class KafkaAdminClient extends AdminClient {
                 completeAllExceptionally(futures.values(), throwable);
             }
         }, now);
-        return new AlterConfigsResult(new HashMap<ConfigResource, KafkaFuture<Void>>(futures));
+        return new AlterConfigsResult(futures);
     }
 
     @Override
@@ -1673,7 +1673,7 @@ public class KafkaAdminClient extends AdminClient {
             }, now);
         }
 
-        return new AlterReplicaDirResult(new HashMap<TopicPartitionReplica, KafkaFuture<Void>>(futures));
+        return new AlterReplicaDirResult(futures);
     }
 
     @Override
@@ -1713,7 +1713,7 @@ public class KafkaAdminClient extends AdminClient {
             }, now);
         }
 
-        return new DescribeLogDirsResult(new HashMap<Integer, KafkaFuture<Map<String, DescribeLogDirsResponse.LogDirInfo>>>(futures));
+        return new DescribeLogDirsResult(futures);
     }
 
     @Override
@@ -1797,6 +1797,6 @@ public class KafkaAdminClient extends AdminClient {
             }, now);
         }
 
-        return new DescribeReplicaLogDirResult(new HashMap<TopicPartitionReplica, KafkaFuture<ReplicaLogDirInfo>>(futures));
+        return new DescribeReplicaLogDirResult(futures);
     }
 }

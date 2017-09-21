@@ -27,9 +27,9 @@ import java.util.Map;
  */
 @InterfaceStability.Evolving
 public class AlterReplicaDirResult {
-    private final Map<TopicPartitionReplica, KafkaFuture<Void>> futures;
+    private final Map<TopicPartitionReplica, ? extends KafkaFuture<Void>> futures;
 
-    AlterReplicaDirResult(Map<TopicPartitionReplica, KafkaFuture<Void>> futures) {
+    AlterReplicaDirResult(Map<TopicPartitionReplica, ? extends KafkaFuture<Void>> futures) {
         this.futures = futures;
     }
 
@@ -44,7 +44,7 @@ public class AlterReplicaDirResult {
      * REPLICA_NOT_AVAILABLE (9)
      * UNKNOWN (-1)
      */
-    public Map<TopicPartitionReplica, KafkaFuture<Void>> values() {
+    public Map<TopicPartitionReplica, ? extends KafkaFuture<Void>> values() {
         return futures;
     }
 

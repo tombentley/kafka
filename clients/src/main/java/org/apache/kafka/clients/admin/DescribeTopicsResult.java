@@ -32,9 +32,9 @@ import java.util.concurrent.ExecutionException;
  */
 @InterfaceStability.Evolving
 public class DescribeTopicsResult {
-    private final Map<String, KafkaFuture<TopicDescription>> futures;
+    private final Map<String, ? extends KafkaFuture<TopicDescription>> futures;
 
-    DescribeTopicsResult(Map<String, KafkaFuture<TopicDescription>> futures) {
+    DescribeTopicsResult(Map<String, ? extends KafkaFuture<TopicDescription>> futures) {
         this.futures = futures;
     }
 
@@ -42,7 +42,7 @@ public class DescribeTopicsResult {
      * Return a map from topic names to futures which can be used to check the status of
      * individual topics.
      */
-    public Map<String, KafkaFuture<TopicDescription>> values() {
+    public Map<String, ? extends KafkaFuture<TopicDescription>> values() {
         return futures;
     }
 
@@ -55,7 +55,7 @@ public class DescribeTopicsResult {
                 @Override
                 public Map<String, TopicDescription> apply(Void v) {
                     Map<String, TopicDescription> descriptions = new HashMap<>(futures.size());
-                    for (Map.Entry<String, KafkaFuture<TopicDescription>> entry : futures.entrySet()) {
+                    for (Map.Entry<String, ? extends KafkaFuture<TopicDescription>> entry : futures.entrySet()) {
                         try {
                             descriptions.put(entry.getKey(), entry.getValue().get());
                         } catch (InterruptedException | ExecutionException e) {

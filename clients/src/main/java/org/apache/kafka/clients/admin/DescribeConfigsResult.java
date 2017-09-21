@@ -34,9 +34,9 @@ import java.util.concurrent.ExecutionException;
 @InterfaceStability.Evolving
 public class DescribeConfigsResult {
 
-    private final Map<ConfigResource, KafkaFuture<Config>> futures;
+    private final Map<ConfigResource, ? extends KafkaFuture<Config>> futures;
 
-    DescribeConfigsResult(Map<ConfigResource, KafkaFuture<Config>> futures) {
+    DescribeConfigsResult(Map<ConfigResource, ? extends KafkaFuture<Config>> futures) {
         this.futures = futures;
     }
 
@@ -44,7 +44,7 @@ public class DescribeConfigsResult {
      * Return a map from resources to futures which can be used to check the status of the configuration for each
      * resource.
      */
-    public Map<ConfigResource, KafkaFuture<Config>> values() {
+    public Map<ConfigResource, ? extends KafkaFuture<Config>> values() {
         return futures;
     }
 
@@ -57,7 +57,7 @@ public class DescribeConfigsResult {
                     @Override
                     public Map<ConfigResource, Config> apply(Void v) {
                         Map<ConfigResource, Config> configs = new HashMap<>(futures.size());
-                        for (Map.Entry<ConfigResource, KafkaFuture<Config>> entry : futures.entrySet()) {
+                        for (Map.Entry<ConfigResource, ? extends KafkaFuture<Config>> entry : futures.entrySet()) {
                             try {
                                 configs.put(entry.getKey(), entry.getValue().get());
                             } catch (InterruptedException | ExecutionException e) {
