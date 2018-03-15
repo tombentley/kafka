@@ -774,19 +774,6 @@ class ZkUtils(val zkClient: ZkClient,
       None
   }
 
-  def getPartitionsBeingReassigned(): Map[TopicAndPartition, ReassignedPartitionsContext] = {
-    // read the partitions and their new replica list
-    val jsonPartitionMapOpt = readDataMaybeNull(ReassignPartitionsPath)._1
-    jsonPartitionMapOpt match {
-      case Some(jsonPartitionMap) =>
-        val reassignedPartitions = parsePartitionReassignmentData(jsonPartitionMap)
-        reassignedPartitions.map { case (tp, newReplicas) =>
-          tp -> new ReassignedPartitionsContext(newReplicas, null)
-        }
-      case None => Map.empty[TopicAndPartition, ReassignedPartitionsContext]
-    }
-  }
-
   def updatePartitionReassignmentData(partitionsToBeReassigned: Map[TopicAndPartition, Seq[Int]]) {
     val zkPath = ZkUtils.ReassignPartitionsPath
     partitionsToBeReassigned.size match {

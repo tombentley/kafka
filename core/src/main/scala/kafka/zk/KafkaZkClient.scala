@@ -22,7 +22,7 @@ import com.yammer.metrics.core.MetricName
 import kafka.api.LeaderAndIsr
 import kafka.cluster.Broker
 import kafka.common.KafkaException
-import kafka.controller.LeaderIsrAndControllerEpoch
+import kafka.controller.{LeaderIsrAndControllerEpoch, PartitionAssignment}
 import kafka.log.LogConfig
 import kafka.metrics.KafkaMetricsGroup
 import kafka.security.auth.SimpleAclAuthorizer.VersionedAcls
@@ -361,7 +361,7 @@ class KafkaZkClient private (zooKeeperClient: ZooKeeperClient, isSecure: Boolean
    * @param assignment the partition to replica mapping to set for the given topic
    * @return SetDataResponse
    */
-  def setTopicAssignmentRaw(topic: String, assignment: collection.Map[TopicPartition, Seq[Int]]): SetDataResponse = {
+  def setTopicAssignmentRaw(topic: String, assignment: collection.Map[TopicPartition, PartitionAssignment]): SetDataResponse = {
     val setDataRequest = SetDataRequest(TopicZNode.path(topic), TopicZNode.encode(assignment), ZkVersion.NoVersion)
     retryRequestUntilConnected(setDataRequest)
   }
@@ -373,7 +373,9 @@ class KafkaZkClient private (zooKeeperClient: ZooKeeperClient, isSecure: Boolean
    * @throws KeeperException if there is an error while setting assignment
    */
   def setTopicAssignment(topic: String, assignment: Map[TopicPartition, Seq[Int]]) = {
-    val setDataResponse = setTopicAssignmentRaw(topic, assignment)
+    val setDataResponse = setTopicAssignmentRaw(topic, assignment.map {
+      case (tp, a) => tp -> PartitionAssignment(a)
+    })
     setDataResponse.maybeThrow
   }
 
@@ -384,7 +386,9 @@ class KafkaZkClient private (zooKeeperClient: ZooKeeperClient, isSecure: Boolean
    * @throws KeeperException if there is an error while creating assignment
    */
   def createTopicAssignment(topic: String, assignment: Map[TopicPartition, Seq[Int]]) = {
-    createRecursive(TopicZNode.path(topic), TopicZNode.encode(assignment))
+    createRecursive(TopicZNode.path(topic), TopicZNode.encode(assignment.map {
+      case (tp, assignment) => tp -> PartitionAssignment(assignment)
+    }))
   }
 
   /**
@@ -453,8 +457,21 @@ class KafkaZkClient private (zooKeeperClient: ZooKeeperClient, isSecure: Boolean
     getDataResponses.flatMap { getDataResponse =>
       val topic = getDataResponse.ctx.get.asInstanceOf[String]
       getDataResponse.resultCode match {
-        case Code.OK => TopicZNode.decode(topic, getDataResponse.data)
+        case Code.OK => TopicZNode.decode(topic, getDataResponse.data).mapValues(_.currentAssignment)
         case Code.NONODE => Map.empty[TopicPartition, Seq[Int]]
+        case _ => throw getDataResponse.resultException.get
+      }
+    }.toMap
+  }
+
+  def getReplicaAssignmentForTopics2(topics: Set[String]): Map[TopicPartition, PartitionAssignment] = {
+    val getDataRequests = topics.map(topic => GetDataRequest(TopicZNode.path(topic), ctx = Some(topic)))
+    val getDataResponses = retryRequestsUntilConnected(getDataRequests.toSeq)
+    getDataResponses.flatMap { getDataResponse =>
+      val topic = getDataResponse.ctx.get.asInstanceOf[String]
+      getDataResponse.resultCode match {
+        case Code.OK => TopicZNode.decode(topic, getDataResponse.data)
+        case Code.NONODE => Map.empty[TopicPartition, PartitionAssignment]
         case _ => throw getDataResponse.resultException.get
       }
     }.toMap
@@ -471,7 +488,7 @@ class KafkaZkClient private (zooKeeperClient: ZooKeeperClient, isSecure: Boolean
     getDataResponses.flatMap { getDataResponse =>
       val topic = getDataResponse.ctx.get.asInstanceOf[String]
        if (getDataResponse.resultCode == Code.OK) {
-        val partitionMap = TopicZNode.decode(topic, getDataResponse.data).map { case (k, v) => (k.partition, v) }
+        val partitionMap = TopicZNode.decode(topic, getDataResponse.data).map { case (k, v) => (k.partition, v.currentAssignment) }
         Map(topic -> partitionMap)
       } else if (getDataResponse.resultCode == Code.NONODE) {
         Map.empty[String, Map[Int, Seq[Int]]]

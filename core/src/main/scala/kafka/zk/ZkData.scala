@@ -22,7 +22,7 @@ import java.util.Properties
 import kafka.api.{ApiVersion, KAFKA_0_10_0_IV1, LeaderAndIsr}
 import kafka.cluster.{Broker, EndPoint}
 import kafka.common.KafkaException
-import kafka.controller.{IsrChangeNotificationHandler, LeaderIsrAndControllerEpoch}
+import kafka.controller.{IsrChangeNotificationHandler, LeaderIsrAndControllerEpoch, PartitionAssignment, Reassignment}
 import kafka.security.auth.SimpleAclAuthorizer.VersionedAcls
 import kafka.security.auth.{Acl, Resource}
 import kafka.server.{ConfigType, DelegationTokenManager}
@@ -231,21 +231,45 @@ object TopicsZNode {
 
 object TopicZNode {
   def path(topic: String) = s"${TopicsZNode.path}/$topic"
-  def encode(assignment: collection.Map[TopicPartition, Seq[Int]]): Array[Byte] = {
-    val assignmentJson = assignment.map { case (partition, replicas) =>
-      partition.partition.toString -> replicas.asJava
+  def encode(assignment: collection.Map[TopicPartition, PartitionAssignment]): Array[Byte] = {
+    val assignmentJson = assignment.map { case (partition, pa) =>
+      partition.partition.toString -> pa.currentAssignment.asJava
     }
-    Json.encodeAsBytes(Map("version" -> 1, "partitions" -> assignmentJson.asJava).asJava)
+    val reassignmentJson = assignment.filter { case (partition, pa) => pa.reassignment.isDefined}.
+        map { case (partition, pa) =>
+          partition.partition.toString ->
+            Map("old" -> pa.reassignment.get.originalAssignment.asJava,
+                "new" -> pa.reassignment.get.reassignment.asJava).asJava
+    }
+    var m = Map("version" -> 2, "partitions" -> assignmentJson.asJava)
+    if (reassignmentJson.nonEmpty) {
+      m += "reassignments"-> reassignmentJson.asJava
+    }
+    Json.encodeAsBytes(m.asJava)
   }
-  def decode(topic: String, bytes: Array[Byte]): Map[TopicPartition, Seq[Int]] = {
+  def decode(topic: String, bytes: Array[Byte]): Map[TopicPartition, PartitionAssignment] = {
+    // TODO How do we upgrade from version 1? We need to populate the partition assignment
+    // from the reassignments znode, but it's our called who needs to do that. How do we signal to them that they need to do so?
     Json.parseBytes(bytes).flatMap { js =>
       val assignmentJson = js.asJsonObject
+      val reassignments = if (assignmentJson.get("version").exists(_.to[Int] >= 2)) {
+        assignmentJson.get("reassignments").map(_.asJsonObject).map {
+          partitionsJson =>
+            partitionsJson.iterator.map { case (partition, reassignment) =>
+              partition -> Reassignment(reassignment.asJsonObject("old").asJsonArray.to[Seq[Int]],
+                reassignment.asJsonObject("new").asJsonArray.to[Seq[Int]])
+            }.toMap
+        }.getOrElse(Map.empty)
+      } else {
+        Map.empty[String, Reassignment]
+      }
       val partitionsJsonOpt = assignmentJson.get("partitions").map(_.asJsonObject)
       partitionsJsonOpt.map { partitionsJson =>
         partitionsJson.iterator.map { case (partition, replicas) =>
-          new TopicPartition(topic, partition.toInt) -> replicas.to[Seq[Int]]
+          new TopicPartition(topic, partition.toInt) -> PartitionAssignment(replicas.to[Seq[Int]], reassignments.get(partition))
         }
       }
+
     }.map(_.toMap).getOrElse(Map.empty)
   }
 }
