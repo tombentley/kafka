@@ -21,7 +21,7 @@ import kafka.server.{KafkaConfig, KafkaServer}
 import kafka.utils.TestUtils._
 import kafka.utils.{Logging, TestUtils}
 import kafka.zk.{ReassignPartitionsZNode, ZooKeeperTestHarness}
-import org.junit.Assert.{assertEquals, assertTrue}
+import org.junit.Assert.{assertEquals, assertTrue, assertFalse}
 import org.junit.{After, Before, Test}
 import kafka.admin.ReplicationQuotaUtils._
 import org.apache.kafka.clients.admin.AdminClientConfig
@@ -596,6 +596,10 @@ class ReassignPartitionsClusterTest extends ZooKeeperTestHarness with Logging {
   def waitForReassignmentToComplete(pause: Long = 100L) {
     waitUntilTrue(() => !zkClient.reassignPartitionsInProgress,
       s"Znode ${ReassignPartitionsZNode.path} wasn't deleted", pause = pause)
+    zkClient.getReplicaAssignmentForTopics2(zkClient.getAllTopicsInCluster.toSet).foreach{ case (tp, reassignment) =>
+      assertFalse(s"Partition $tp is still being reassigned according to /brokers/topics${tp.topic}",
+        reassignment.reassignment.isDefined)
+    }
   }
 
   def json(topic: String*): String = {

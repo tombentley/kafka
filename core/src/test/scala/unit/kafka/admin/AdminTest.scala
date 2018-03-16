@@ -220,6 +220,8 @@ class AdminTest extends ZooKeeperTestHarness with Logging with RackAwareTest {
         Map(topicAndPartition -> newReplicas), partitionsBeingReassigned) == ReassignmentCompleted
       },
       "Partition reassignment should complete")
+    assertFalse("The topic znode should not have a reassignment",
+      zkClient.getReplicaAssignmentForTopics2(Set(topic).toSet)(topicAndPartition).reassignment.isDefined)
     val assignedReplicas = zkClient.getReplicasForPartition(new TopicPartition(topic, partitionToBeReassigned))
     // in sync replicas should not have any replica that is not in the new assigned replicas
     checkForPhantomInSyncReplicas(zkClient, topic, partitionToBeReassigned, assignedReplicas)
@@ -250,6 +252,8 @@ class AdminTest extends ZooKeeperTestHarness with Logging with RackAwareTest {
           Map(topicAndPartition -> newReplicas), partitionsBeingReassigned) == ReassignmentCompleted
       },
       "Partition reassignment should complete")
+    assertFalse("The topic znode should not have a reassignment",
+      zkClient.getReplicaAssignmentForTopics2(Set(topic).toSet)(topicAndPartition).reassignment.isDefined)
     val assignedReplicas = zkClient.getReplicasForPartition(new TopicPartition(topic, partitionToBeReassigned))
     assertEquals("Partition should have been reassigned to 0, 2, 3", newReplicas, assignedReplicas)
     checkForPhantomInSyncReplicas(zkClient, topic, partitionToBeReassigned, assignedReplicas)
@@ -279,6 +283,8 @@ class AdminTest extends ZooKeeperTestHarness with Logging with RackAwareTest {
           Map(topicAndPartition -> newReplicas), partitionsBeingReassigned) == ReassignmentCompleted
       },
       "Partition reassignment should complete")
+    assertFalse("The topic znode should not have a reassignment",
+      zkClient.getReplicaAssignmentForTopics2(Set(topic).toSet)(topicAndPartition).reassignment.isDefined)
     val assignedReplicas = zkClient.getReplicasForPartition(new TopicPartition(topic, partitionToBeReassigned))
     assertEquals("Partition should have been reassigned to 2, 3", newReplicas, assignedReplicas)
     checkForPhantomInSyncReplicas(zkClient, topic, partitionToBeReassigned, assignedReplicas)
@@ -300,6 +306,8 @@ class AdminTest extends ZooKeeperTestHarness with Logging with RackAwareTest {
     assertFalse("Partition reassignment failed for test, 0", reassignPartitionsCommand.reassignPartitions())
     val reassignedPartitions = zkClient.getPartitionReassignment
     assertFalse("Partition should not be reassigned", reassignedPartitions.contains(topicAndPartition))
+    assertFalse("The topic znode should not exist",
+      zkClient.getReplicaAssignmentForTopics2(Set(topic).toSet).contains(topicAndPartition))
   }
 
   @Test
