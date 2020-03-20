@@ -890,7 +890,9 @@ class ReassignPartitionsClusterTest extends ZooKeeperTestHarness with Logging {
     ))
     ReassignPartitionsCommand.executeAssignment(zkClient, Some(adminClient), topicJson, Throttle(throttleSetting.throttleBytes.toLong))
     waitUntilTrue(() => {
-      !adminClient.listPartitionReassignments().reassignments().get().isEmpty
+      val zkReassignmentsInProgress = adminClient.listPartitionReassignments(Set(tp0, tp1).asJava).reassignments().get()
+      zkReassignmentsInProgress.get(tp0).addingReplicas().equals(Collections.singletonList(102)) &&
+        zkReassignmentsInProgress.get(tp1).addingReplicas().equals(Collections.singletonList(102))
     }, "Controller should have picked up on znode creation", 1000)
 
     val zkReassignmentsInProgress = adminClient.listPartitionReassignments(Set(tp0, tp1).asJava).reassignments().get()
