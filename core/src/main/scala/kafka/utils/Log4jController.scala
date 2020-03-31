@@ -77,9 +77,13 @@ object Log4j1Controller extends LoggingBackend {
 
   def existingLoggerLevel(loggerName: String): String = {
     val log = existingLogger(loggerName);
-    if (log != null)
-      log.getLevel.toString
-    else
+    if (log != null) {
+      val level = log.getLevel
+      if (level != null)
+        level.toString
+      else
+        existingLogger(LoggingBackend.ROOT_LOGGER).getLevel.toString
+    } else
       null
   }
 }
