@@ -29,7 +29,7 @@ import kafka.log.LogConfig
 import kafka.security.authorizer.AclEntry
 import kafka.server.{Defaults, DynamicConfig, KafkaConfig, KafkaServer}
 import kafka.utils.TestUtils._
-import kafka.utils.{Log4jController, TestUtils}
+import kafka.utils.{LoggingBackend, TestUtils}
 import kafka.zk.KafkaZkClient
 import org.apache.kafka.clients.admin._
 import org.apache.kafka.clients.consumer.{ConsumerConfig, KafkaConsumer}
@@ -2000,7 +2000,7 @@ class PlaintextAdminIntegrationTest extends BaseAdminIntegrationTest {
     client = Admin.create(createConfig())
 
     val loggerConfig = describeBrokerLoggers()
-    val rootLogLevel = loggerConfig.get(Log4jController.ROOT_LOGGER).value()
+    val rootLogLevel = loggerConfig.get(LoggingBackend.ROOT_LOGGER).value()
     val logCleanerLogLevelConfig = loggerConfig.get("kafka.cluster.Replica")
     assertEquals(rootLogLevel, logCleanerLogLevelConfig.value()) // we expect an undefined log level to be the same as the root logger
     assertEquals("kafka.cluster.Replica", logCleanerLogLevelConfig.name())
@@ -2016,19 +2016,19 @@ class PlaintextAdminIntegrationTest extends BaseAdminIntegrationTest {
     client = Admin.create(createConfig())
 
     val initialLoggerConfig = describeBrokerLoggers()
-    val initialRootLogLevel = initialLoggerConfig.get(Log4jController.ROOT_LOGGER).value()
+    val initialRootLogLevel = initialLoggerConfig.get(LoggingBackend.ROOT_LOGGER).value()
     assertEquals(initialRootLogLevel, initialLoggerConfig.get("kafka.controller.KafkaController").value())
     assertEquals(initialRootLogLevel, initialLoggerConfig.get("kafka.log.LogCleaner").value())
     assertEquals(initialRootLogLevel, initialLoggerConfig.get("kafka.server.ReplicaManager").value())
 
     val newRootLogLevel = LogLevelConfig.DEBUG_LOG_LEVEL
     val alterRootLoggerEntry = Seq(
-      new AlterConfigOp(new ConfigEntry(Log4jController.ROOT_LOGGER, newRootLogLevel), AlterConfigOp.OpType.SET)
+      new AlterConfigOp(new ConfigEntry(LoggingBackend.ROOT_LOGGER, newRootLogLevel), AlterConfigOp.OpType.SET)
     ).asJavaCollection
     // Test validateOnly does not change anything
     alterBrokerLoggers(alterRootLoggerEntry, validateOnly = true)
     val validatedLoggerConfig = describeBrokerLoggers()
-    assertEquals(initialRootLogLevel, validatedLoggerConfig.get(Log4jController.ROOT_LOGGER).value())
+    assertEquals(initialRootLogLevel, validatedLoggerConfig.get(LoggingBackend.ROOT_LOGGER).value())
     assertEquals(initialRootLogLevel, validatedLoggerConfig.get("kafka.controller.KafkaController").value())
     assertEquals(initialRootLogLevel, validatedLoggerConfig.get("kafka.log.LogCleaner").value())
     assertEquals(initialRootLogLevel, validatedLoggerConfig.get("kafka.server.ReplicaManager").value())
@@ -2037,7 +2037,7 @@ class PlaintextAdminIntegrationTest extends BaseAdminIntegrationTest {
     // test that we can change them and unset loggers still use the root's log level
     alterBrokerLoggers(alterRootLoggerEntry)
     val changedRootLoggerConfig = describeBrokerLoggers()
-    assertEquals(newRootLogLevel, changedRootLoggerConfig.get(Log4jController.ROOT_LOGGER).value())
+    assertEquals(newRootLogLevel, changedRootLoggerConfig.get(LoggingBackend.ROOT_LOGGER).value())
     assertEquals(newRootLogLevel, changedRootLoggerConfig.get("kafka.controller.KafkaController").value())
     assertEquals(newRootLogLevel, changedRootLoggerConfig.get("kafka.log.LogCleaner").value())
     assertEquals(newRootLogLevel, changedRootLoggerConfig.get("kafka.server.ReplicaManager").value())
@@ -2060,7 +2060,7 @@ class PlaintextAdminIntegrationTest extends BaseAdminIntegrationTest {
     ).asJavaCollection
     alterBrokerLoggers(alterLogLevelsEntries)
     val alteredLoggerConfig = describeBrokerLoggers()
-    assertEquals(newRootLogLevel, alteredLoggerConfig.get(Log4jController.ROOT_LOGGER).value())
+    assertEquals(newRootLogLevel, alteredLoggerConfig.get(LoggingBackend.ROOT_LOGGER).value())
     assertEquals(LogLevelConfig.INFO_LOG_LEVEL, alteredLoggerConfig.get("kafka.controller.KafkaController").value())
     assertEquals(LogLevelConfig.ERROR_LOG_LEVEL, alteredLoggerConfig.get("kafka.log.LogCleaner").value())
     assertEquals(LogLevelConfig.TRACE_LOG_LEVEL, alteredLoggerConfig.get("kafka.server.ReplicaManager").value())
@@ -2081,11 +2081,11 @@ class PlaintextAdminIntegrationTest extends BaseAdminIntegrationTest {
     // step 1 - configure root logger
     val initialRootLogLevel = LogLevelConfig.TRACE_LOG_LEVEL
     val alterRootLoggerEntry = Seq(
-      new AlterConfigOp(new ConfigEntry(Log4jController.ROOT_LOGGER, initialRootLogLevel), AlterConfigOp.OpType.SET)
+      new AlterConfigOp(new ConfigEntry(LoggingBackend.ROOT_LOGGER, initialRootLogLevel), AlterConfigOp.OpType.SET)
     ).asJavaCollection
     alterBrokerLoggers(alterRootLoggerEntry)
     val initialLoggerConfig = describeBrokerLoggers()
-    assertEquals(initialRootLogLevel, initialLoggerConfig.get(Log4jController.ROOT_LOGGER).value())
+    assertEquals(initialRootLogLevel, initialLoggerConfig.get(LoggingBackend.ROOT_LOGGER).value())
     assertEquals(initialRootLogLevel, initialLoggerConfig.get("kafka.controller.KafkaController").value())
 
     // step 2 - change KafkaController logger to INFO
@@ -2094,7 +2094,7 @@ class PlaintextAdminIntegrationTest extends BaseAdminIntegrationTest {
     ).asJavaCollection
     alterBrokerLoggers(alterControllerLoggerEntry)
     val changedControllerLoggerConfig = describeBrokerLoggers()
-    assertEquals(initialRootLogLevel, changedControllerLoggerConfig.get(Log4jController.ROOT_LOGGER).value())
+    assertEquals(initialRootLogLevel, changedControllerLoggerConfig.get(LoggingBackend.ROOT_LOGGER).value())
     assertEquals(LogLevelConfig.INFO_LOG_LEVEL, changedControllerLoggerConfig.get("kafka.controller.KafkaController").value())
 
     // step 3 - unset KafkaController logger
@@ -2103,16 +2103,16 @@ class PlaintextAdminIntegrationTest extends BaseAdminIntegrationTest {
     ).asJavaCollection
     alterBrokerLoggers(deleteControllerLoggerEntry)
     val deletedControllerLoggerConfig = describeBrokerLoggers()
-    assertEquals(initialRootLogLevel, deletedControllerLoggerConfig.get(Log4jController.ROOT_LOGGER).value())
+    assertEquals(initialRootLogLevel, deletedControllerLoggerConfig.get(LoggingBackend.ROOT_LOGGER).value())
     assertEquals(initialRootLogLevel, deletedControllerLoggerConfig.get("kafka.controller.KafkaController").value())
 
     val newRootLogLevel = LogLevelConfig.ERROR_LOG_LEVEL
     val newAlterRootLoggerEntry = Seq(
-      new AlterConfigOp(new ConfigEntry(Log4jController.ROOT_LOGGER, newRootLogLevel), AlterConfigOp.OpType.SET)
+      new AlterConfigOp(new ConfigEntry(LoggingBackend.ROOT_LOGGER, newRootLogLevel), AlterConfigOp.OpType.SET)
     ).asJavaCollection
     alterBrokerLoggers(newAlterRootLoggerEntry)
     val newRootLoggerConfig = describeBrokerLoggers()
-    assertEquals(newRootLogLevel, newRootLoggerConfig.get(Log4jController.ROOT_LOGGER).value())
+    assertEquals(newRootLogLevel, newRootLoggerConfig.get(LoggingBackend.ROOT_LOGGER).value())
     assertEquals(newRootLogLevel, newRootLoggerConfig.get("kafka.controller.KafkaController").value())
   }
 
@@ -2121,7 +2121,7 @@ class PlaintextAdminIntegrationTest extends BaseAdminIntegrationTest {
   def testIncrementalAlterConfigsForLog4jLogLevelsCannotResetRootLogger(): Unit = {
     client = Admin.create(createConfig())
     val deleteRootLoggerEntry = Seq(
-      new AlterConfigOp(new ConfigEntry(Log4jController.ROOT_LOGGER, ""), AlterConfigOp.OpType.DELETE)
+      new AlterConfigOp(new ConfigEntry(LoggingBackend.ROOT_LOGGER, ""), AlterConfigOp.OpType.DELETE)
     ).asJavaCollection
 
     assertTrue(intercept[ExecutionException](alterBrokerLoggers(deleteRootLoggerEntry)).getCause.isInstanceOf[InvalidRequestException])
@@ -2203,7 +2203,7 @@ class PlaintextAdminIntegrationTest extends BaseAdminIntegrationTest {
    */
   private def teardownBrokerLoggers(): Unit = {
     if (changedBrokerLoggers.nonEmpty) {
-      val validLoggers = describeBrokerLoggers().entries().asScala.filterNot(_.name.equals(Log4jController.ROOT_LOGGER)).map(_.name).toSet
+      val validLoggers = describeBrokerLoggers().entries().asScala.filterNot(_.name.equals(LoggingBackend.ROOT_LOGGER)).map(_.name).toSet
       val unsetBrokerLoggersEntries = changedBrokerLoggers
         .intersect(validLoggers)
         .map { logger => new AlterConfigOp(new ConfigEntry(logger, ""), AlterConfigOp.OpType.DELETE) }
@@ -2211,7 +2211,7 @@ class PlaintextAdminIntegrationTest extends BaseAdminIntegrationTest {
 
       // ensure that we first reset the root logger to an arbitrary log level. Note that we cannot reset it to its original value
       alterBrokerLoggers(List(
-        new AlterConfigOp(new ConfigEntry(Log4jController.ROOT_LOGGER, LogLevelConfig.FATAL_LOG_LEVEL), AlterConfigOp.OpType.SET)
+        new AlterConfigOp(new ConfigEntry(LoggingBackend.ROOT_LOGGER, LogLevelConfig.FATAL_LOG_LEVEL), AlterConfigOp.OpType.SET)
       ).asJavaCollection)
       alterBrokerLoggers(unsetBrokerLoggersEntries)
 

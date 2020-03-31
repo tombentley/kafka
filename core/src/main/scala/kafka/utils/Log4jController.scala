@@ -22,21 +22,19 @@ import java.util.Locale
 
 import org.apache.log4j.{Level, LogManager, Logger}
 
-import scala.collection.mutable
 import scala.collection.JavaConverters._
+import scala.collection.{SortedMap, mutable}
 
-
-object Log4jController {
-  val ROOT_LOGGER = "root"
-
+object Log4j1Controller extends LoggingBackend {
+  override def name: String = "log4j"
   /**
     * Returns a map of the log4j loggers and their assigned log level.
     * If a logger does not have a log level assigned, we return the root logger's log level
     */
   def loggers: mutable.Map[String, String] = {
     val logs = new mutable.HashMap[String, String]()
-    val rootLoggerLvl = existingLogger(ROOT_LOGGER).getLevel.toString
-    logs.put(ROOT_LOGGER, rootLoggerLvl)
+    val rootLoggerLvl = existingLogger(LoggingBackend.ROOT_LOGGER).getLevel.toString
+    logs.put(LoggingBackend.ROOT_LOGGER, rootLoggerLvl)
 
     val loggers = LogManager.getCurrentLoggers
     while (loggers.hasMoreElements) {
@@ -72,10 +70,18 @@ object Log4jController {
 
   def loggerExists(loggerName: String): Boolean = existingLogger(loggerName) != null
 
-  private def existingLogger(loggerName: String) =
-    if (loggerName == ROOT_LOGGER)
+  private def existingLogger(loggerName: String): Logger =
+    if (loggerName == LoggingBackend.ROOT_LOGGER)
       LogManager.getRootLogger
     else LogManager.exists(loggerName)
+
+  def existingLoggerLevel(loggerName: String): String = {
+    val log = existingLogger(loggerName);
+    if (log != null)
+      log.getLevel.toString
+    else
+      null
+  }
 }
 
 /**
@@ -86,30 +92,30 @@ object Log4jController {
  */
 class Log4jController extends Log4jControllerMBean {
 
+  private val backend = LoggingBackend()
+
+  override def getBackendName: String = backend.name
+
   def getLoggers: util.List[String] = {
-    Log4jController.loggers.map {
+    new java.util.ArrayList((SortedMap[String, String]() ++ backend.loggers).map {
       case (logger, level) => s"$logger=$level"
-    }.toList.asJava
+    }.toList.asJava)
   }
 
-
   def getLogLevel(loggerName: String): String = {
-    val log = Log4jController.existingLogger(loggerName)
-    if (log != null) {
-      val level = log.getLevel
-      if (level != null)
-        log.getLevel.toString
-      else
-        Log4jController.existingLogger(Log4jController.ROOT_LOGGER).getLevel.toString
+    val level = backend.existingLoggerLevel(loggerName)
+    if (level != null) {
+      level
     }
     else "No such logger."
   }
 
-  def setLogLevel(loggerName: String, level: String): Boolean = Log4jController.logLevel(loggerName, level)
+  def setLogLevel(loggerName: String, level: String): Boolean = backend.logLevel(loggerName, level)
 }
 
 
 trait Log4jControllerMBean {
+  def getBackendName: String
   def getLoggers: java.util.List[String]
   def getLogLevel(logger: String): String
   def setLogLevel(logger: String, level: String): Boolean

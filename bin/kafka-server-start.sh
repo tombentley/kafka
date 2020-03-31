@@ -22,7 +22,11 @@ fi
 base_dir=$(dirname $0)
 
 if [ "x$KAFKA_LOG4J_OPTS" = "x" ]; then
-    export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:$base_dir/../config/log4j.properties"
+    if [ -f "$base_dir/../config/log4j2.properties" ]; then
+        export KAFKA_LOG4J_OPTS="-Dlog4j.configurationFile=$base_dir/../config/log4j2.properties"
+    else
+        export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:$base_dir/../config/log4j.properties"
+    fi
 fi
 
 if [ "x$KAFKA_HEAP_OPTS" = "x" ]; then

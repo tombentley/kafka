@@ -21,7 +21,6 @@ import java.util.{Collections, Properties}
 import kafka.admin.{AdminOperationException, AdminUtils}
 import kafka.common.TopicAlreadyMarkedForDeletionException
 import kafka.log.LogConfig
-import kafka.utils.Log4jController
 import kafka.metrics.KafkaMetricsGroup
 import kafka.utils._
 import kafka.zk.{AdminZkClient, KafkaZkClient}
@@ -396,7 +395,7 @@ class AdminManager(val config: KafkaConfig,
             else if (resourceNameToBrokerId(resource.name) != config.brokerId)
               throw new InvalidRequestException(s"Unexpected broker id, expected ${config.brokerId} but received ${resource.name}")
             else
-              createResponseConfig(Log4jController.loggers,
+              createResponseConfig(LoggingBackend().loggers,
                 (name, value) => new DescribeConfigsResponse.ConfigEntry(name, value.toString, ConfigSource.DYNAMIC_BROKER_LOGGER_CONFIG, false, false, List.empty.asJava))
           case resourceType => throw new InvalidRequestException(s"Unsupported resource type: $resourceType")
         }
@@ -486,8 +485,8 @@ class AdminManager(val config: KafkaConfig,
       val loggerName = alterConfigOp.configEntry().name()
       val logLevel = alterConfigOp.configEntry().value()
       alterConfigOp.opType() match {
-        case OpType.SET => Log4jController.logLevel(loggerName, logLevel)
-        case OpType.DELETE => Log4jController.unsetLogLevel(loggerName)
+        case OpType.SET => LoggingBackend().logLevel(loggerName, logLevel)
+        case OpType.DELETE => LoggingBackend().unsetLogLevel(loggerName)
         case _ => throw new IllegalArgumentException(
           s"Log level cannot be changed for OpType: ${alterConfigOp.opType()}")
       }
@@ -576,7 +575,7 @@ class AdminManager(val config: KafkaConfig,
 
   private def validateLogLevelConfigs(alterConfigOps: List[AlterConfigOp]): Unit = {
     def validateLoggerNameExists(loggerName: String): Unit = {
-      if (!Log4jController.loggerExists(loggerName))
+      if (!LoggingBackend().loggerExists(loggerName))
         throw new ConfigException(s"Logger $loggerName does not exist!")
     }
 
@@ -595,8 +594,8 @@ class AdminManager(val config: KafkaConfig,
           }
         case OpType.DELETE =>
           validateLoggerNameExists(loggerName)
-          if (loggerName == Log4jController.ROOT_LOGGER)
-            throw new InvalidRequestException(s"Removing the log level of the ${Log4jController.ROOT_LOGGER} logger is not allowed")
+          if (loggerName == LoggingBackend.ROOT_LOGGER)
+            throw new InvalidRequestException(s"Removing the log level of the ${LoggingBackend.ROOT_LOGGER} logger is not allowed")
         case OpType.APPEND => throw new InvalidRequestException(s"${OpType.APPEND} operation is not allowed for the ${ConfigResource.Type.BROKER_LOGGER} resource")
         case OpType.SUBTRACT => throw new InvalidRequestException(s"${OpType.SUBTRACT} operation is not allowed for the ${ConfigResource.Type.BROKER_LOGGER} resource")
       }
