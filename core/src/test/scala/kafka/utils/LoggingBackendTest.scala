@@ -20,7 +20,7 @@ import org.junit.Test
 import org.junit.Assert.{assertEquals, assertTrue}
 import com.typesafe.scalalogging.Logger
 
-class Log4j2ControllerTest {
+class LoggingBackendTest {
   @Test
   def main(): Unit = {
     val backend = LoggingBackend()
