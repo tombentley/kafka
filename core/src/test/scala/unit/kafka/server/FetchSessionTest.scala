@@ -70,17 +70,27 @@ class FetchSessionTest {
     assertEquals(INVALID_SESSION_ID, cache.maybeCreateSession(30, false, 40, () => dummyCreate(40)))
     assertEquals(INVALID_SESSION_ID, cache.maybeCreateSession(40, false, 5, () => dummyCreate(5)))
     assertCacheContains(cache, id1, id2, id3)
-    cache.touch(cache.get(id1).get, 200)
+    touchInLock(cache, id1, 200)
     val id4 = cache.maybeCreateSession(210, false, 11, () => dummyCreate(11))
     assertCacheContains(cache, id1, id3, id4)
-    cache.touch(cache.get(id1).get, 400)
-    cache.touch(cache.get(id3).get, 390)
-    cache.touch(cache.get(id4).get, 400)
+    touchInLock(cache, id1, 400)
+    touchInLock(cache, id3, 390)
+    touchInLock(cache, id4, 400)
     val id5 = cache.maybeCreateSession(410, false, 50, () => dummyCreate(50))
     assertCacheContains(cache, id3, id4, id5)
     assertEquals(INVALID_SESSION_ID, cache.maybeCreateSession(410, false, 5, () => dummyCreate(5)))
     val id6 = cache.maybeCreateSession(410, true, 5, () => dummyCreate(5))
     assertCacheContains(cache, id3, id5, id6)
+  }
+
+  private def touchInLock(cache: FetchSessionCache, sessionId: Int, now: Long) = {
+    val value = cache.get(sessionId).get
+    value.lock.lock()
+    try {
+      cache.touch(value, now)
+    } finally {
+      value.lock.unlock()
+    }
   }
 
   @Test
@@ -104,8 +114,8 @@ class FetchSessionTest {
     assertEquals(6, cache.totalPartitions)
     assertEquals(2, cache.size)
     assertEquals(0, cache.evictionsMeter.count)
-    cache.touch(session1, 200)
-    cache.touch(session2, 200)
+    touchInLock(cache, session1.id, 200)
+    touchInLock(cache, session2.id, 200)
     val id3 = cache.maybeCreateSession(200, false, 5, () => dummyCreate(5))
     assertTrue(id3 > 0)
     assertCacheContains(cache, id2, id3)
@@ -122,7 +132,7 @@ class FetchSessionTest {
     iter.remove()
     assertEquals(3, session2.size)
     assertEquals(4, session2.cachedSize)
-    cache.touch(session2, session2.lastUsedMs)
+    touchInLock(cache, session2.id, session2.lastUsedMs)
     assertEquals(3, cache.totalPartitions)
   }
 

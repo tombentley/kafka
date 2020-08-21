@@ -19,9 +19,12 @@ package kafka.server
 
 import java.util
 import java.util.Optional
-import java.util.concurrent.{ThreadLocalRandom, TimeUnit}
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.locks.ReentrantLock
+import java.util.concurrent.{ConcurrentHashMap, ConcurrentSkipListMap, Semaphore, ThreadLocalRandom, TimeUnit}
 
 import kafka.metrics.KafkaMetricsGroup
+import kafka.server.FetchSession.CACHE_MAP
 import kafka.utils.Logging
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.protocol.Errors
@@ -31,7 +34,7 @@ import org.apache.kafka.common.requests.{FetchRequest, FetchResponse, FetchMetad
 import org.apache.kafka.common.utils.{ImplicitLinkedHashCollection, Time, Utils}
 
 import scala.math.Ordered.orderingToOrdered
-import scala.collection.{mutable, _}
+import scala.collection._
 
 object FetchSession {
   type REQ_MAP = util.Map[TopicPartition, FetchRequest.PartitionData]
@@ -202,29 +205,40 @@ class FetchSession(val id: Int,
                    val creationMs: Long,
                    var lastUsedMs: Long,
                    var epoch: Int) {
+  val lock = new ReentrantLock()
+
   // This is used by the FetchSessionCache to store the last known size of this session.
   // If this is -1, the Session is not in the cache.
   var cachedSize = -1
 
-  def size: Int = synchronized {
+  def synchronize[X](action: => X): X = {
+    lock.lock()
+    try {
+      action
+    } finally {
+      lock.unlock()
+    }
+  }
+
+  def size: Int = synchronize {
     partitionMap.size
   }
 
-  def isEmpty: Boolean = synchronized {
+  def isEmpty: Boolean = synchronize {
     partitionMap.isEmpty
   }
 
-  def lastUsedKey: LastUsedKey = synchronized {
+  def lastUsedKey: LastUsedKey = synchronize {
     LastUsedKey(lastUsedMs, id)
   }
 
-  def evictableKey: EvictableKey = synchronized {
+  def evictableKey: EvictableKey = synchronize {
     EvictableKey(privileged, cachedSize, id)
   }
 
-  def metadata: JFetchMetadata = synchronized { new JFetchMetadata(id, epoch) }
+  def metadata: JFetchMetadata = synchronize { new JFetchMetadata(id, epoch) }
 
-  def getFetchOffset(topicPartition: TopicPartition): Option[Long] = synchronized {
+  def getFetchOffset(topicPartition: TopicPartition): Option[Long] = synchronize {
     Option(partitionMap.find(new CachedPartition(topicPartition))).map(_.fetchOffset)
   }
 
@@ -233,7 +247,7 @@ class FetchSession(val id: Int,
   // Update the cached partition data based on the request.
   def update(fetchData: FetchSession.REQ_MAP,
              toForget: util.List[TopicPartition],
-             reqMetadata: JFetchMetadata): (TL, TL, TL) = synchronized {
+             reqMetadata: JFetchMetadata): (TL, TL, TL) = synchronize {
     val added = new TL
     val updated = new TL
     val removed = new TL
@@ -255,7 +269,7 @@ class FetchSession(val id: Int,
     (added, updated, removed)
   }
 
-  override def toString: String = synchronized {
+  override def toString: String = synchronize {
     "FetchSession(id=" + id +
       ", privileged=" + privileged +
       ", partitionMap.size=" + partitionMap.size +
@@ -398,7 +412,7 @@ class IncrementalFetchContext(private val time: Time,
 
   override def foreachPartition(fun: (TopicPartition, FetchRequest.PartitionData) => Unit): Unit = {
     // Take the session lock and iterate over all the cached partitions.
-    session.synchronized {
+    session.synchronize {
       session.partitionMap.forEach { part =>
         fun(new TopicPartition(part.topic, part.partition), part.reqData)
       }
@@ -446,7 +460,7 @@ class IncrementalFetchContext(private val time: Time,
   }
 
   override def getResponseSize(updates: FetchSession.RESP_MAP, versionId: Short): Int = {
-    session.synchronized {
+    session.synchronize {
       val expectedEpoch = JFetchMetadata.nextEpoch(reqMetadata.epoch)
       if (session.epoch != expectedEpoch) {
         FetchResponse.sizeOf(versionId, (new FetchSession.RESP_MAP).entrySet.iterator)
@@ -458,7 +472,7 @@ class IncrementalFetchContext(private val time: Time,
   }
 
   override def updateAndGenerateResponseData(updates: FetchSession.RESP_MAP): FetchResponse[Records] = {
-    session.synchronized {
+    session.synchronize {
       // Check to make sure that the session epoch didn't change in between
       // creating this fetch context and generating this response.
       val expectedEpoch = JFetchMetadata.nextEpoch(reqMetadata.epoch)
@@ -480,7 +494,7 @@ class IncrementalFetchContext(private val time: Time,
   }
 
   override def getThrottledResponse(throttleTimeMs: Int): FetchResponse[Records] = {
-    session.synchronized {
+    session.synchronize {
       // Check to make sure that the session epoch didn't change in between
       // creating this fetch context and generating this response.
       val expectedEpoch = JFetchMetadata.nextEpoch(reqMetadata.epoch)
@@ -520,20 +534,25 @@ case class EvictableKey(privileged: Boolean, size: Int, id: Int) extends Compara
   */
 class FetchSessionCache(private val maxEntries: Int,
                         private val evictionMs: Long) extends Logging with KafkaMetricsGroup {
-  private var numPartitions: Long = 0
+  // This is only used for metrics, so its state changes don't need to be atomic wrt other members
+  private val numPartitions = new AtomicLong()
 
   // A map of session ID to FetchSession.
-  private val sessions = new mutable.HashMap[Int, FetchSession]
+  private val sessions = new ConcurrentHashMap[Int, FetchSession]
+
+  // The number of free slots in sessions map.
+  // If there are none then it will be necessary to try to evict another session
+  private val freeSlots = new Semaphore(maxEntries)
 
   // Maps last used times to sessions.
-  private val lastUsed = new util.TreeMap[LastUsedKey, FetchSession]
+  private val lastUsed = new ConcurrentSkipListMap[LastUsedKey, FetchSession]
 
   // A map containing sessions which can be evicted by both privileged and
   // unprivileged sessions.
-  private val evictableByAll = new util.TreeMap[EvictableKey, FetchSession]
+  private val evictableByAll = new ConcurrentSkipListMap[EvictableKey, FetchSession]
 
   // A map containing sessions which can be evicted by privileged sessions.
-  private val evictableByPrivileged = new util.TreeMap[EvictableKey, FetchSession]
+  private val evictableByPrivileged = new ConcurrentSkipListMap[EvictableKey, FetchSession]
 
   // Set up metrics.
   removeMetric(FetchSession.NUM_INCREMENTAL_FETCH_SESSISONS)
@@ -544,40 +563,44 @@ class FetchSessionCache(private val maxEntries: Int,
   private[server] val evictionsMeter = newMeter(FetchSession.INCREMENTAL_FETCH_SESSIONS_EVICTIONS_PER_SEC,
     FetchSession.EVICTIONS, TimeUnit.SECONDS, Map.empty)
 
+
   /**
     * Get a session by session ID.
     *
     * @param sessionId  The session ID.
     * @return           The session, or None if no such session was found.
     */
-  def get(sessionId: Int): Option[FetchSession] = synchronized {
-    sessions.get(sessionId)
+  def get(sessionId: Int): Option[FetchSession] = {
+    Option(sessions.get(sessionId))
   }
 
   /**
     * Get the number of entries currently in the fetch session cache.
     */
-  def size: Int = synchronized {
-    sessions.size
+  def size: Int = {
+    maxEntries - freeSlots.availablePermits()
   }
 
   /**
     * Get the total number of cached partitions.
     */
-  def totalPartitions: Long = synchronized {
-    numPartitions
+  def totalPartitions: Long = {
+    numPartitions.get()
   }
 
   /**
-    * Creates a new random session ID.  The new session ID will be positive and unique on this broker.
+    * Creates a new random session ID which will be positive.
+    * The returned id is not guaranteed to be unique on this broker
+    * (because there's no lock preventing another thread from generating the same id).
+    * It's uniqueness can only be proven when it's added to sessions.
     *
     * @return   The new session ID.
     */
-  def newSessionId(): Int = synchronized {
+  def newSessionId(): Int = {
     var id = 0
     do {
       id = ThreadLocalRandom.current().nextInt(1, Int.MaxValue)
-    } while (sessions.contains(id) || id == INVALID_SESSION_ID)
+    } while (sessions.containsKey(id) || id == INVALID_SESSION_ID)
     id
   }
 
@@ -593,22 +616,36 @@ class FetchSessionCache(private val maxEntries: Int,
   def maybeCreateSession(now: Long,
                          privileged: Boolean,
                          size: Int,
-                         createPartitions: () => FetchSession.CACHE_MAP): Int =
-  synchronized {
+                         createPartitions: () => FetchSession.CACHE_MAP): Int = {
     // If there is room, create a new session entry.
-    if ((sessions.size < maxEntries) ||
-        tryEvict(privileged, EvictableKey(privileged, size, 0), now)) {
+    if (freeSlots.tryAcquire() || tryEvict(privileged, EvictableKey(privileged, size, 0), now)) {
       val partitionMap = createPartitions()
-      val session = new FetchSession(newSessionId(), privileged, partitionMap,
-          now, now, JFetchMetadata.nextEpoch(INITIAL_EPOCH))
-      debug(s"Created fetch session ${session.toString}")
-      sessions.put(session.id, session)
-      touch(session, now)
+      var session = createSession(now, privileged, partitionMap)
+      // Note the session is locked before it's discoverable via shared state (sessions, lastUsed or evictable maps)
+      session.lock.lock()
+      while (sessions.putIfAbsent(session.id, session) != null) {
+        // because computing a session id is not atomic with adding it to sessions
+        // there's the possibility that two threads allocate the same id to different sessions
+        // so we use the atomicity of putIfAbsent and recompute if there is a collision.
+        session = createSession(now, privileged, partitionMap)
+        session.lock.lock()
+      }
+      try {
+        debug(s"Created fetch session ${session.toString}")
+        touch(session, now)
+      } finally {
+        session.lock.unlock()
+      }
       session.id
     } else {
       debug(s"No fetch session created for privileged=$privileged, size=$size.")
       INVALID_SESSION_ID
     }
+  }
+
+  private def createSession(now: Long, privileged: Boolean, partitionMap: CACHE_MAP) = {
+    new FetchSession(newSessionId(), privileged, partitionMap,
+      now, now, JFetchMetadata.nextEpoch(INITIAL_EPOCH))
   }
 
   /**
@@ -624,96 +661,163 @@ class FetchSessionCache(private val maxEntries: Int,
     * @param now        The current time in milliseconds.
     * @return           True if an entry was evicted; false otherwise.
     */
-  def tryEvict(privileged: Boolean, key: EvictableKey, now: Long): Boolean = synchronized {
+  def tryEvict(privileged: Boolean, key: EvictableKey, now: Long): Boolean = {
     // Try to evict an entry which is stale.
-    val lastUsedEntry = lastUsed.firstEntry
-    if (lastUsedEntry == null) {
-      trace("There are no cache entries to evict.")
-      false
-    } else if (now - lastUsedEntry.getKey.lastUsedMs > evictionMs) {
-      val session = lastUsedEntry.getValue
-      trace(s"Evicting stale FetchSession ${session.id}.")
-      remove(session)
-      evictionsMeter.mark()
-      true
-    } else {
-      // If there are no stale entries, check the first evictable entry.
-      // If it is less valuable than our proposed entry, evict it.
-      val map = if (privileged) evictableByPrivileged else evictableByAll
-      val evictableEntry = map.firstEntry
-      if (evictableEntry == null) {
-        trace("No evictable entries found.")
-        false
-      } else if (key.compareTo(evictableEntry.getKey) < 0) {
-        trace(s"Can't evict ${evictableEntry.getKey} with ${key.toString}")
-        false
+    var stop = false;
+    while (!stop) {
+      val it = lastUsed.entrySet().iterator()
+      while (!stop && it.hasNext) {
+        val lastUsedEntry = it.next()
+        if (now - lastUsedEntry.getKey.lastUsedMs > evictionMs) {
+          val session = lastUsedEntry.getValue
+          if (session.lock.tryLock()) {
+            try {
+              if (sessions.containsKey(session.id)) {
+                // We have to check sessions still contains this session, since another thread might have evicted it
+                // it after get got the first entry and before we acquired the lock
+                trace(s"Evicting stale FetchSession ${session.id}.")
+                // Don't release the freeLocks semaphore, since successful eviction means a new session will be added
+                remove(session, false)
+                evictionsMeter.mark()
+                return true
+              }
+            } finally {
+              session.lock.unlock()
+            }
+          } // else try the next session in lastUsed, since one stale session is as evictable as another
+        } else {
+          // We got the end of the stale sessions, give up on staleness-based eviction.
+          stop = true
+        }
+      }
+      // There are not more sessions in lastUses, give up
+      stop = true
+    }
+
+    // If there are no stale entries, check the first evictable entry.
+    // If it is less valuable than our proposed entry, evict it.
+    stop = false
+    val map = if (privileged) evictableByPrivileged else evictableByAll
+    while (!stop) {
+      val evictableEntry = map.firstEntry()
+      if (evictableEntry != null) {
+        val session = evictableEntry.getValue
+        if (session.lock.tryLock()) {
+          try {
+            if (key.compareTo(evictableEntry.getKey) < 0) {
+              trace(s"Can't evict ${evictableEntry.getKey} with ${key.toString}")
+              return false
+            } else if (sessions.containsKey(session.id)) {
+              // We have to check sessions still contains this session, since another thread might have evicted it
+              // it after get got the first entry and before we acquired the lock
+              trace(s"Evicting ${evictableEntry.getKey} with ${key.toString}.")
+              // Don't release the freeLocks semaphore, since successful eviction means a new session will be added
+              remove(session, false)
+              evictionsMeter.mark()
+              return true
+            }
+          } finally {
+            session.lock.unlock()
+          }
+        }
+        // else we can't lock session. Unlike stale eviction, the next entry in the map is more more valuable
+        //  than this one, so try to get the first element again
       } else {
-        trace(s"Evicting ${evictableEntry.getKey} with ${key.toString}.")
-        remove(evictableEntry.getValue)
-        evictionsMeter.mark()
-        true
+        stop = true
       }
     }
+    trace("No evictable entries found.")
+    false
   }
 
-  def remove(sessionId: Int): Option[FetchSession] = synchronized {
-    get(sessionId) match {
-      case None => None
-      case Some(session) => remove(session)
+  def remove(sessionId: Int): Option[FetchSession] = {
+    var sessionOpt = get(sessionId)
+    while (sessionOpt.isDefined) {
+      val session = sessionOpt.get
+      if (session.lock.tryLock()) {
+        try {
+          remove(session)
+        } finally {
+          session.lock.unlock()
+        }
+        return sessionOpt
+      }
+      sessionOpt = get(sessionId)
     }
+    None
   }
 
   /**
     * Remove an entry from the session cache.
+    * The session's lock must be held by the caller.
     *
-    * @param session  The session.
+    * @param session      The session.
+    * @param releaseSlot  Whether to decrement freeSlots, allowing other threads to create a session without eviction.
     *
-    * @return         The removed session, or None if there was no such session.
+    * @return             The removed session, or None if there was no such session.
     */
-  def remove(session: FetchSession): Option[FetchSession] = synchronized {
-    val evictableKey = session.synchronized {
-      lastUsed.remove(session.lastUsedKey)
-      session.evictableKey
+  def remove(session: FetchSession, releaseSlot: Boolean = true): Option[FetchSession] = {
+    // session's lock must be held by the caller of this method
+    val count = session.lock.getHoldCount
+    if (count != 1) {
+      throw new IllegalStateException("Unexpected count " + count)
     }
+
+    if (lastUsed.remove(session.lastUsedKey) != session) {
+      throw new IllegalStateException(s"Removing session ${session}")
+    }
+    val evictableKey = session.evictableKey
     evictableByAll.remove(evictableKey)
     evictableByPrivileged.remove(evictableKey)
-    val removeResult = sessions.remove(session.id)
+    val removeResult = Option(sessions.remove(session.id))
     if (removeResult.isDefined) {
-      numPartitions = numPartitions - session.cachedSize
+      numPartitions.addAndGet(-session.cachedSize)
+    } else {
+      throw new IllegalStateException(s"Removing session ${session}")
+    }
+    if (releaseSlot) {
+      freeSlots.release()
     }
     removeResult
   }
 
   /**
     * Update a session's position in the lastUsed and evictable trees.
+    * The session's lock must be held by the caller.
     *
     * @param session  The session.
     * @param now      The current time in milliseconds.
     */
-  def touch(session: FetchSession, now: Long): Unit = synchronized {
-    session.synchronized {
-      // Update the lastUsed map.
-      lastUsed.remove(session.lastUsedKey)
-      session.lastUsedMs = now
-      lastUsed.put(session.lastUsedKey, session)
-
-      val oldSize = session.cachedSize
-      if (oldSize != -1) {
-        val oldEvictableKey = session.evictableKey
-        evictableByPrivileged.remove(oldEvictableKey)
-        evictableByAll.remove(oldEvictableKey)
-        numPartitions = numPartitions - oldSize
-      }
-      session.cachedSize = session.size
-      val newEvictableKey = session.evictableKey
-      if ((!session.privileged) || (now - session.creationMs > evictionMs)) {
-        evictableByPrivileged.put(newEvictableKey, session)
-      }
-      if (now - session.creationMs > evictionMs) {
-        evictableByAll.put(newEvictableKey, session)
-      }
-      numPartitions = numPartitions + session.cachedSize
+  def touch(session: FetchSession, now: Long): Unit = {
+    // session's lock must be held by the caller of this method
+    val count = session.lock.getHoldCount
+    if (count != 1) {
+      throw new IllegalStateException("Unexpected count " + count)
     }
+    // Update the lastUsed map.
+    lastUsed.remove(session.lastUsedKey)
+    session.lastUsedMs = now
+    lastUsed.put(session.lastUsedKey, session)
+    val oldSize = session.cachedSize
+
+    val oldEvictableKey = session.evictableKey
+    val oldSizeDecrement = if (oldSize != -1) oldSize else 0
+    session.cachedSize = session.size
+    val newEvictableKey = session.evictableKey
+    if ((!session.privileged) || (now - session.creationMs > evictionMs)) {
+      evictableByPrivileged.put(newEvictableKey, session)
+    }
+    if (oldEvictableKey != newEvictableKey) {
+      evictableByPrivileged.remove(oldEvictableKey)
+    }
+
+    if (now - session.creationMs > evictionMs) {
+      evictableByAll.put(newEvictableKey, session)
+    }
+    if (oldEvictableKey != newEvictableKey) {
+      evictableByAll.remove(oldEvictableKey)
+    }
+    numPartitions.addAndGet(session.cachedSize - oldSizeDecrement)
   }
 }
 
@@ -743,38 +847,47 @@ class FetchManager(private val time: Time,
         s"${removedFetchSessionStr}${suffix}")
       context
     } else {
-      cache.synchronized {
-        cache.get(reqMetadata.sessionId) match {
-          case None => {
+      var sessionOpt: Option[FetchContext] = None
+      while (sessionOpt.isEmpty) {
+        sessionOpt = cache.get(reqMetadata.sessionId) match {
+          case None =>
             debug(s"Session error for ${reqMetadata.sessionId}: no such session ID found.")
-            new SessionErrorContext(Errors.FETCH_SESSION_ID_NOT_FOUND, reqMetadata)
-          }
-          case Some(session) => session.synchronized {
+            Some(new SessionErrorContext(Errors.FETCH_SESSION_ID_NOT_FOUND, reqMetadata))
+          case Some(session) =>
             if (session.epoch != reqMetadata.epoch) {
               debug(s"Session error for ${reqMetadata.sessionId}: expected epoch " +
                 s"${session.epoch}, but got ${reqMetadata.epoch} instead.");
-              new SessionErrorContext(Errors.INVALID_FETCH_SESSION_EPOCH, reqMetadata)
+              Some(new SessionErrorContext(Errors.INVALID_FETCH_SESSION_EPOCH, reqMetadata))
             } else {
-              val (added, updated, removed) = session.update(fetchData, toForget, reqMetadata)
-              if (session.isEmpty) {
-                debug(s"Created a new sessionless FetchContext and closing session id ${session.id}, " +
-                  s"epoch ${session.epoch}: after removing ${partitionsToLogString(removed)}, " +
-                  s"there are no more partitions left.")
-                cache.remove(session)
-                new SessionlessFetchContext(fetchData)
+              if (session.lock.tryLock()) {
+                try {
+                  val (added, updated, removed) = session.update(fetchData, toForget, reqMetadata)
+                  if (session.isEmpty) {
+                    debug(s"Created a new sessionless FetchContext and closing session id ${session.id}, " +
+                      s"epoch ${session.epoch}: after removing ${partitionsToLogString(removed)}, " +
+                      s"there are no more partitions left.")
+                    cache.remove(session)
+                    Some(new SessionlessFetchContext(fetchData))
+                  } else {
+                    session.epoch = JFetchMetadata.nextEpoch(session.epoch)
+                    debug(s"Created a new incremental FetchContext for session id ${session.id}, " +
+                      s"epoch ${session.epoch}: added ${partitionsToLogString(added)}, " +
+                      s"updated ${partitionsToLogString(updated)}, " +
+                      s"removed ${partitionsToLogString(removed)}")
+                    cache.touch(session, time.milliseconds())
+                    Some(new IncrementalFetchContext(time, reqMetadata, session))
+                  }
+                } finally {
+                  session.lock.unlock()
+                }
               } else {
-                cache.touch(session, time.milliseconds())
-                session.epoch = JFetchMetadata.nextEpoch(session.epoch)
-                debug(s"Created a new incremental FetchContext for session id ${session.id}, " +
-                  s"epoch ${session.epoch}: added ${partitionsToLogString(added)}, " +
-                  s"updated ${partitionsToLogString(updated)}, " +
-                  s"removed ${partitionsToLogString(removed)}")
-                new IncrementalFetchContext(time, reqMetadata, session)
+                // re-read from cache
+                None
               }
             }
-          }
         }
-      }
+      }// while
+      sessionOpt.get
     }
     context
   }
