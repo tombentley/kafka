@@ -29,6 +29,7 @@ import java.util.{HashMap, Properties, Random}
 import com.yammer.metrics.core.{Gauge, Meter}
 import javax.net.ssl._
 import kafka.metrics.KafkaYammerMetrics
+import kafka.network
 import kafka.security.CredentialProvider
 import kafka.server.{KafkaConfig, ThrottledChannel}
 import kafka.utils.Implicits._
@@ -1042,7 +1043,7 @@ class SocketServerTest {
       val request = receiveRequest(channel)
 
       val requestMetrics = channel.metrics(request.header.apiKey.name)
-      def totalTimeHistCount(): Long = requestMetrics.totalTimeHist.count
+      def totalTimeHistCount(): Long = requestMetrics.find(_.isInstanceOf[RequestMetrics]).get.asInstanceOf[network.RequestMetrics].totalTimeHist.count
       val send = new NetworkSend(request.context.connectionId, ByteBuffer.allocate(responseBufferSize))
       channel.sendResponse(new RequestChannel.SendResponse(request, send, Some("someResponse"), None))
 
@@ -1113,7 +1114,7 @@ class SocketServerTest {
         s"Idle connection `${request.context.connectionId}` was not closed by selector")
 
       val requestMetrics = channel.metrics(request.header.apiKey.name)
-      def totalTimeHistCount(): Long = requestMetrics.totalTimeHist.count
+      def totalTimeHistCount(): Long = requestMetrics.find(_.isInstanceOf[RequestMetrics]).get.asInstanceOf[network.RequestMetrics].totalTimeHist.count
       val expectedTotalTimeCount = totalTimeHistCount() + 1
 
       processRequest(channel, request)
@@ -1131,9 +1132,9 @@ class SocketServerTest {
     server.stopProcessingRequests()
     val version = ApiKeys.PRODUCE.latestVersion
     val version2 = (version - 1).toShort
-    for (_ <- 0 to 1) server.dataPlaneRequestChannel.metrics(ApiKeys.PRODUCE.name).requestRate(version).mark()
-    server.dataPlaneRequestChannel.metrics(ApiKeys.PRODUCE.name).requestRate(version2).mark()
-    assertEquals(2, server.dataPlaneRequestChannel.metrics(ApiKeys.PRODUCE.name).requestRate(version).count())
+    for (_ <- 0 to 1) server.dataPlaneRequestChannel.metrics(ApiKeys.PRODUCE.name).find(_.isInstanceOf[RequestMetrics]).get.asInstanceOf[network.RequestMetrics].requestRate(version).mark()
+    server.dataPlaneRequestChannel.metrics(ApiKeys.PRODUCE.name).find(_.isInstanceOf[RequestMetrics]).get.asInstanceOf[network.RequestMetrics].requestRate(version2).mark()
+    assertEquals(2, server.dataPlaneRequestChannel.metrics(ApiKeys.PRODUCE.name).find(_.isInstanceOf[RequestMetrics]).get.asInstanceOf[network.RequestMetrics].requestRate(version).count())
     server.dataPlaneRequestChannel.updateErrorMetrics(ApiKeys.PRODUCE, Map(Errors.NONE -> 1))
     val nonZeroMeters = Map(s"kafka.network:type=RequestMetrics,name=RequestsPerSec,request=Produce,version=$version" -> 2,
         s"kafka.network:type=RequestMetrics,name=RequestsPerSec,request=Produce,version=$version2" -> 1,

@@ -17,17 +17,22 @@
 
 package kafka.network
 
+import java.lang.management.ManagementFactory
 import java.net.InetAddress
 import java.nio.ByteBuffer
+import java.util
 import java.util.concurrent._
 
 import com.typesafe.scalalogging.Logger
 import com.yammer.metrics.core.Meter
+import javax.management.ObjectName
 import kafka.log.LogConfig
 import kafka.metrics.KafkaMetricsGroup
 import kafka.server.KafkaConfig
 import kafka.utils.{Logging, NotNothing, Pool}
 import kafka.utils.Implicits._
+import org.HdrHistogram.Histogram
+import org.apache.kafka.common.Configurable
 import org.apache.kafka.common.config.types.Password
 import org.apache.kafka.common.config.ConfigResource
 import org.apache.kafka.common.memory.MemoryPool
@@ -60,19 +65,28 @@ object RequestChannel extends Logging {
     val sanitizedUser: String = Sanitizer.sanitize(principal.getName)
   }
 
-  class Metrics(allowDisabledApis: Boolean = false) {
+  class Metrics(allowDisabledApis: Boolean = false, requestMetricsRecorders: Option[RequestMetricsRecorderFactory] = None) {
 
-    private val metricsMap = mutable.Map[String, RequestMetrics]()
+    private val metricsMap = mutable.Map[String, Seq[RequestMetricsRecorder]]()
 
     (ApiKeys.values.toSeq.filter(_.isEnabled || allowDisabledApis).map(_.name) ++
         Seq(RequestMetrics.consumerFetchMetricName, RequestMetrics.followFetchMetricName)).foreach { name =>
-      metricsMap.put(name, new RequestMetrics(name))
+      metricsMap.put(name, Seq(new RequestMetrics(name)) ++ (requestMetricsRecorders match {
+        case Some(r) => Seq(r.newRecorder(name))
+        case None => Seq()
+      }))
     }
 
     def apply(metricName: String) = metricsMap(metricName)
 
     def close(): Unit = {
-       metricsMap.values.foreach(_.removeMetrics())
+      metricsMap.values.foreach(_.foreach {
+        case m =>
+          if (m.isInstanceOf[RequestMetrics]) {
+            m.asInstanceOf[RequestMetrics].removeMetrics()
+          }
+      }
+      )
     }
   }
 
@@ -200,18 +214,20 @@ object RequestChannel extends Logging {
         else Seq.empty
       val metricNames = fetchMetricNames :+ header.apiKey.name
       metricNames.foreach { metricName =>
-        val m = metrics(metricName)
-        m.requestRate(header.apiVersion).mark()
-        m.requestQueueTimeHist.update(Math.round(requestQueueTimeMs))
-        m.localTimeHist.update(Math.round(apiLocalTimeMs))
-        m.remoteTimeHist.update(Math.round(apiRemoteTimeMs))
-        m.throttleTimeHist.update(apiThrottleTimeMs)
-        m.responseQueueTimeHist.update(Math.round(responseQueueTimeMs))
-        m.responseSendTimeHist.update(Math.round(responseSendTimeMs))
-        m.totalTimeHist.update(Math.round(totalTimeMs))
-        m.requestBytesHist.update(sizeOfBodyInBytes)
-        m.messageConversionsTimeHist.foreach(_.update(Math.round(messageConversionsTimeMs)))
-        m.tempMemoryBytesHist.foreach(_.update(temporaryMemoryBytes))
+        val recorders = metrics(metricName)
+        recorders.foreach { case recorder =>
+          recorder.apiRequestRate(header.apiVersion)
+          recorder.requestQueueTime(Math.round(requestQueueTimeMs))
+          recorder.localTime(Math.round(apiLocalTimeMs))
+          recorder.remoteTime(Math.round(apiRemoteTimeMs))
+          recorder.throttleTime(apiThrottleTimeMs)
+          recorder.responseQueueTime(Math.round(responseQueueTimeMs))
+          recorder.responseSendTime(Math.round(responseSendTimeMs))
+          recorder.totalTime(Math.round(totalTimeMs))
+          recorder.requestBytes(sizeOfBodyInBytes)
+          recorder.messageConversionsTime(Math.round(messageConversionsTimeMs))
+          recorder.tempMemoryBytes(temporaryMemoryBytes)
+        }
       }
 
       // Records network handler thread usage. This is included towards the request quota for the
@@ -313,9 +329,10 @@ object RequestChannel extends Logging {
 class RequestChannel(val queueSize: Int,
                      val metricNamePrefix: String,
                      time: Time,
-                     allowDisabledApis: Boolean = false) extends KafkaMetricsGroup {
+                     allowDisabledApis: Boolean = false,
+                     requestMetricsRecorders: Option[RequestMetricsRecorderFactory] = None) extends KafkaMetricsGroup {
   import RequestChannel._
-  val metrics = new RequestChannel.Metrics(allowDisabledApis)
+  val metrics = new RequestChannel.Metrics(allowDisabledApis, requestMetricsRecorders)
   private val requestQueue = new ArrayBlockingQueue[BaseRequest](queueSize)
   private val processors = new ConcurrentHashMap[Int, Processor]()
   val requestQueueSizeMetricName = metricNamePrefix.concat(RequestQueueSizeMetric)
@@ -397,7 +414,7 @@ class RequestChannel(val queueSize: Int,
 
   def updateErrorMetrics(apiKey: ApiKeys, errors: collection.Map[Errors, Integer]): Unit = {
     errors.forKeyValue { (error, count) =>
-      metrics(apiKey.name).markErrorMeter(error, count)
+      metrics(apiKey.name).filter(_.isInstanceOf[RequestMetrics]).foreach(_.asInstanceOf[RequestMetrics].markErrorMeter(error, count))
     }
   }
 
@@ -432,7 +449,7 @@ object RequestMetrics {
   val ErrorsPerSec = "ErrorsPerSec"
 }
 
-class RequestMetrics(name: String) extends KafkaMetricsGroup {
+class RequestMetrics(name: String) extends KafkaMetricsGroup with RequestMetricsRecorder {
 
   import RequestMetrics._
 
@@ -524,5 +541,159 @@ class RequestMetrics(name: String) extends KafkaMetricsGroup {
     }
     errorMeters.values.foreach(_.removeMeter())
     errorMeters.clear()
+  }
+
+  override def apiRequestRate(apiVersion: Short): Unit = requestRate(apiVersion).mark()
+
+  override def requestQueueTime(timeMs: Long): Unit = requestQueueTimeHist.update(timeMs)
+
+  override def localTime(timeMs: Long): Unit = localTimeHist.update(timeMs)
+
+  override def remoteTime(timeMs: Long): Unit = remoteTimeHist.update(timeMs)
+
+  override def throttleTime(timeMs: Long): Unit = throttleTimeHist.update(timeMs)
+
+  override def responseQueueTime(timeMs: Long): Unit = responseQueueTimeHist.update(timeMs)
+
+  override def responseSendTime(timeMs: Long): Unit = responseSendTimeHist.update(timeMs)
+
+  override def totalTime(timeMs: Long): Unit = totalTimeHist.update(timeMs)
+
+  override def requestBytes(numBytes: Long): Unit = requestBytesHist.update(numBytes)
+
+  override def messageConversionsTime(timeMs: Long): Unit = messageConversionsTimeHist.foreach(_.update(timeMs))
+
+  override def tempMemoryBytes(numBytes: Long): Unit = tempMemoryBytesHist.foreach(_.update(numBytes))
+}
+
+trait RequestMetricsRecorderFactory extends Configurable {
+  def newRecorder(name: String): RequestMetricsRecorder
+}
+
+class HdrHistogramRecorderFactory extends RequestMetricsRecorderFactory {
+  override def newRecorder(name: String): RequestMetricsRecorder = new HdrHistogramRecorder(name)
+
+  /**
+    * Configure this class with the given key-value pairs
+    */
+  override def configure(configs: util.Map[String, _]): Unit = { }
+}
+
+trait RequestMetricsRecorder {
+  def apiRequestRate(apiVersion: Short): Unit
+  def requestQueueTime(timeMs: Long): Unit
+  def localTime(timeMs: Long): Unit
+  def remoteTime(timeMs: Long): Unit
+  def throttleTime(timeMs: Long): Unit
+  def responseQueueTime(timeMs: Long): Unit
+  def responseSendTime(timeMs: Long): Unit
+  def totalTime(timeMs: Long): Unit
+  def requestBytes(numBytes: Long): Unit
+  def messageConversionsTime(timeMs: Long): Unit
+  def tempMemoryBytes(numBytes: Long): Unit
+}
+
+class HdrHistogramRecorder(apiName: String) extends RequestMetricsRecorder {
+
+  private val mbs = ManagementFactory.getPlatformMBeanServer()
+  def newHistogram(highestTrackableValue: Long, numberOfSignificantValueDigits: Int, histoName: String): Histogram = {
+    val histogram = new Histogram(highestTrackableValue, numberOfSignificantValueDigits)
+    mbs.registerMBean(new HdrHistogram(histogram), new ObjectName(s"kafka.network:type=RequestHistograms,request=$apiName,name=$histoName"))
+    histogram
+  }
+
+  val sf = 2
+  val maxTime = 30_000
+  val requestQueueTimeHist = newHistogram(maxTime, sf, "maxTime")
+  val localTimeHist = newHistogram(maxTime, sf, "localTime")
+  val remoteTimeHist = newHistogram(maxTime, sf, "remoteTime")
+  val throttleTimeHist = newHistogram(maxTime, sf, "throttleTime")
+  val responseQueueTimeHist = newHistogram(maxTime, sf, "responseQueueTime")
+  val responseSendTimeHist = newHistogram(maxTime, sf, "responseSendTime")
+  val totalTimeHist = newHistogram(maxTime, sf, "totalTime")
+  val requestBytesHist = newHistogram(1024*1024, sf, "requestBytes") // TODO make it request size
+  val messageConversionTimeHist = newHistogram(maxTime, sf, "messageConversionTime")
+  val tempMemoryBytesHist = newHistogram(1024*1024, sf, "tempMemoryBytes") // TODO size hist properly
+
+  override def apiRequestRate(apiVersion: Short): Unit = {
+    // to nothing
+  }
+
+  override def requestQueueTime(timeMs: Long): Unit = {
+    requestQueueTimeHist.recordValue(timeMs)
+  }
+
+  override def localTime(timeMs: Long): Unit = {
+    localTimeHist.recordValue(timeMs)
+  }
+
+  override def remoteTime(timeMs: Long): Unit = {
+    remoteTimeHist.recordValue(timeMs)
+  }
+
+  override def throttleTime(timeMs: Long): Unit = {
+    throttleTimeHist.recordValue(timeMs)
+  }
+
+  override def responseQueueTime(timeMs: Long): Unit = {
+    responseQueueTimeHist.recordValue(timeMs)
+  }
+
+  override def responseSendTime(timeMs: Long): Unit = {
+    responseSendTimeHist.recordValue(timeMs)
+  }
+
+  override def totalTime(timeMs: Long): Unit = {
+    totalTimeHist.recordValue(timeMs)
+  }
+
+  override def requestBytes(numBytes: Long): Unit = {
+    requestBytesHist.recordValue(numBytes)
+  }
+
+  override def messageConversionsTime(timeMs: Long): Unit = {
+    messageConversionTimeHist.recordValue(timeMs)
+  }
+
+  override def tempMemoryBytes(numBytes: Long): Unit = {
+    tempMemoryBytesHist.recordValue(numBytes)
+  }
+
+
+}
+trait HdrHistogramMBean {
+  def getP90(): Long
+  def getP95(): Long
+  def getP99(): Long
+  def getP999(): Long
+  def getMean(): Double
+  def getMax(): Long
+  def getMin(): Long
+  def getFootprintBytes(): Long
+  def getTotalCount(): Long
+  def getBuckets(): java.util.List[Long]
+  def getBucketCounts(): java.util.List[Long]
+}
+class HdrHistogram(histogram: Histogram) extends HdrHistogramMBean {
+
+  override def getMean(): Double = histogram.getMean
+  override def getMax(): Long = histogram.getMaxValue
+  override def getMin(): Long = histogram.getMinValue
+
+  override def getP90(): Long = histogram.getValueAtPercentile(90.0)
+  override def getP95(): Long = histogram.getValueAtPercentile(95.0)
+  override def getP99(): Long = histogram.getValueAtPercentile(99.0)
+  override def getP999(): Long = histogram.getValueAtPercentile(99.9)
+
+  override def getFootprintBytes(): Long = histogram.getEstimatedFootprintInBytes
+
+  override def getTotalCount(): Long = histogram.getTotalCount
+
+  override def getBuckets(): java.util.List[Long] = {
+    new java.util.ArrayList[Long](histogram.logarithmicBucketValues(1, 2).asScala.map(x => x.getValueIteratedTo).toList.asJava)
+  }
+
+  override def getBucketCounts(): java.util.List[Long] = {
+    new java.util.ArrayList[Long](histogram.logarithmicBucketValues(1, 2).asScala.map(x => x.getCountAddedInThisIterationStep).toList.asJava)
   }
 }

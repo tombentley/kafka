@@ -95,12 +95,14 @@ class SocketServer(val config: KafkaConfig,
   // data-plane
   private val dataPlaneProcessors = new ConcurrentHashMap[Int, Processor]()
   private[network] val dataPlaneAcceptors = new ConcurrentHashMap[EndPoint, Acceptor]()
-  val dataPlaneRequestChannel = new RequestChannel(maxQueuedRequests, DataPlaneMetricPrefix, time, allowDisabledApis)
+  val dataPlaneRequestChannel = new RequestChannel(maxQueuedRequests, DataPlaneMetricPrefix, time, allowDisabledApis,
+    Option(config.metricsRequestMetricRecorders).map(_ => config.getConfiguredInstance(KafkaConfig.MetricsRequestMetricRecorderProp, classOf[RequestMetricsRecorderFactory])))
   // control-plane
   private var controlPlaneProcessorOpt : Option[Processor] = None
   private[network] var controlPlaneAcceptorOpt : Option[Acceptor] = None
   val controlPlaneRequestChannelOpt: Option[RequestChannel] = config.controlPlaneListenerName.map(_ =>
-    new RequestChannel(20, ControlPlaneMetricPrefix, time, allowDisabledApis))
+    new RequestChannel(20, ControlPlaneMetricPrefix, time, allowDisabledApis,
+      Option(config.metricsRequestMetricRecorders).map(_ => config.getConfiguredInstance(KafkaConfig.MetricsRequestMetricRecorderProp, classOf[RequestMetricsRecorderFactory]))))
 
   private var nextProcessorId = 0
   private var connectionQuotas: ConnectionQuotas = _
